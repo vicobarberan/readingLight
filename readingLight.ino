@@ -34,19 +34,19 @@ La secuencia de inicio INIT (en la cual se incluye una de calibrado) es:
 
 Si pasa DOG_TIMEOUT (en milisegundos) sin recibir nada se reinicia el proceso y se pone en espera del ciclo de INIT (y calibrado).
 
-Despues de esto se envia STX (start text) seguido de el mensaje en ASCII en sistema octal con tres digitos para cada caracter, sólo se incluye el leading zero para completar los tres digitos para cada caracter enviado.
+Despues de esto se envia TransmittingText (start text) seguido de el mensaje en ASCII en sistema octal con tres digitos para cada caracter, sólo se incluye el leading zero para completar los tres digitos para cada caracter enviado.
 
 Para poder integrar más comandos en el futuro por esta vía se usa un caracter newLine (\n) octal - 012, para separar el commando, y los diferentes parametros. Para terminar el texto se envia ETX (end of text) octal - 003 después el CRC y al final EOT (end of transmission) octal - 004.
 De esta manera queda:
-	STXcomando\nparametro1\nparametro2\nparametroN\nETXCRCEOT
+	TransmittingTextcomando\nparametro1\nparametro2\nparametroN\nETXCRCEOT
 
 Falta implementar el calculo y envio del CRC entre el ETX y el EOT.
 
 Para el comando de envio de credenciales, al que llamaremos auth:
 
-	INITSTXauth\nmySSID\nmyPASS\nmyTOKEN\nETXCRCEOT
+	INITTransmittingTextauth\nmySSID\nmyPASS\nmyTOKEN\nETXCRCEOT
 
-El CRC debe incluir  el commando + los parametros, (todo lo que se encuentre entre STX y ETX) lo cual no debe ser mayor a 1024 bytes.
+El CRC debe incluir  el commando + los parametros, (todo lo que se encuentre entre TransmittingText y ETX) lo cual no debe ser mayor a 1024 bytes.
 
 
 FLOW
@@ -85,16 +85,15 @@ FLOW
   * 0xFA (12 valores en 18 ms)
   * 0XFB (8 valores en 15 ms)
   * 
-  * parece que la mejor opcion es 0xFB o FA a 70 ms --> 8 chars de 7 bits x seg. (17 valores)
+  * parece que la mejor opcion es 0xFB a 70 ms --> (9 valores)
   */
 #define TIME0  0xFB
+
 
 float newReading = 0;
 float OldReading = 0;
 int repetition = 0;
 float tolerance = 0.30;  //podria valer la pena ajustar la tolerancia al calibrar
-
-//asi como esta funciona perfecto con 13 niveles! (a 500 ms) ;-)
 
 #define levelNum 9
 float levels[levelNum];
@@ -103,23 +102,21 @@ int oldLevel = 0;
 
 String newChar = "0";
 String buffer;
-String payload[8];
 
 float localCheckSum = 0;
 
 float watchDOG = 0;
 #define DOG_TIMEOUT 2000 // If no valid char is received in this timeout we restart and calibrate again.
 
-bool STX = false;	//start text
-bool EOT = false;	//end of transmission
+bool TransmittingText = false;	// This is true after STX (start text) and false after ETX (end text)
+bool EOT = false;	// End of transmission, true when transmission ends or watchdog kicks in.
 
 void setup() {
-  	Wire.begin(); 
+  	Wire.begin();
   	deb.begin(115200);
-  	delay(2000);
   	ledColor(255,0,0);
-  	pinMode(7, INPUT);
-	feedDOG();
+    pinMode(7, INPUT);
+    feedDOG();          // Start timer for watchdog
 }
 
 void loop() {
@@ -127,10 +124,12 @@ void loop() {
 	if (calibrate()) {
 
 		EOT = false;
-		STX = false;
+		TransmittingText = false;
 
 		while (!EOT) {
 			char b = getChar();
+
+      deb.print(b);
 
 			//feed the dog only with valid chars
 			if (b > 0 && b < 255) feedDOG();
@@ -140,11 +139,11 @@ void loop() {
 				deb.println("Starting...");
 				localCheckSum = 0;
 				buffer = "";
-				STX = true;
+				TransmittingText = true;
 			}
 			// End of text signal
 			else if (b == 0x03) {
-				STX = false;
+				TransmittingText = false;
 				
 				if (checksum()) {
 					deb.println("Finished!!!");
@@ -157,21 +156,16 @@ void loop() {
 				break;
 			}
 
-			if (STX) {
+			if (TransmittingText) {
 
 				// if char its not a newline
 				if (b != 0x0A) {
 					buffer.concat(b);
 				} else {
 
-					// feed the dog every newline
-					// feedDOG();
-					//deberia alimentar al dog cada vez que reciba un char valido
-					//checar la tabla ascii para ver como implementarlo!
-					// asi podria tener un timeout mucho mas corto.
-
-					// print received line
-					deb.println(buffer);
+					// Aqui debo guardar el buffer
+          deb.println("");
+					// deb.println(buffer);
 					buffer = "";
 				}
 			} else {
@@ -194,7 +188,6 @@ float getValue() {
 		if (dogBite()) {
 			if (!EOT) {
 				EOT = true;
-				return -1;
 			}
 		}
 
@@ -239,6 +232,7 @@ bool calibrate() {
 			// If we reach the levelnum we are done!
 			if (newLevel + 1 == levelNum) {
 				deb.println("Calibrated!!");
+        feedDOG();
 				return true;
 			} 
 
@@ -269,7 +263,7 @@ char getChar() {
 		
 		//add the value to checksum
 		int newInt = strtol(octalString.c_str(), NULL, 0);
-		if (STX) localCheckSum = localCheckSum + newInt;
+		if (TransmittingText) localCheckSum = localCheckSum + newInt;
 		
 		char newChar = newInt;
 		// deb.print(octalString);
@@ -309,6 +303,7 @@ bool dogBite() {
 	return false;
 } 
 
+
 void feedDOG() {
 	watchDOG = millis();
 }
@@ -323,25 +318,25 @@ bool checksum() {
 	
 	int receivedInt = strtol(sum.c_str(), NULL, 8);
 
-	deb.print("checksum received: ");
-	deb.print(receivedInt);
-	deb.print("   calculated: ");
+	// deb.print("checksum received: ");
+	// deb.print(receivedInt);
+	// deb.print("   calculated: ");
+  // deb.println(localCheckSum - 3);
+    
 	// We need to remove the last char (ETX-003) thats not part of the checksum
 	// but is cheaper to remove it here than to filter its adition.
-	deb.println(localCheckSum - 3);
-
 	if (receivedInt == localCheckSum - 3) {
 		deb.println("checksum OK");
 		return true;
 	} 
-
 	deb.println("checksum ERROR!!");
 	return false;
 }
 
+
+
 void restart() {
 	deb.println("Restarted!! waiting for calibration signal...");
-	// EOT = true;
 	feedDOG();
 }
 

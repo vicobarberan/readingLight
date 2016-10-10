@@ -207,6 +207,10 @@ state = 1
 
 while True:
 
+	# There should be a pause of more time than the watchdog timeout to give the kit time to restart after errors.
+	paint(MIN)
+	time.sleep(2.5)
+
 	checksum = 0
 	INIT()
 
