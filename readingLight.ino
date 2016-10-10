@@ -1,23 +1,69 @@
 
-/*TODO
+/*
  * 
- * [ ] message available - detection
- * [x] continous calibration
- * [ ] design data frame
- * [ ] encoding
- * [ ] protocol
- * [ ] crc
+El sistema detecta los cambios de color, de esta manera no es necesaria una señal de reloj ni ninguna sincronización entre el kit y la pantalla. La señal se puede enviar a tan lento como se quiera, el único limite es que no puede ir más rápido que la velocidad de muestreo que tiene el sensor de luz. De hecho debe ir a una velocidad de alrededor de 3 veces la velocidad de muestreo del sensor, el cual para aceptar una lectura como válida debe capturarla por lo menos 2 veces.
 
---En cada paquete debo enviar el minimo y el maximo por lo menos una vez y resetar mis maXlevel y minLevel
+Los colores a usar van de 0 (negro) a levelnum (blanco) el blanco se utiliza para indicar una repetición de el color anterior. La sensibilidad de el sensor disminuye mientras más rápido sea el muestreo y aumenta con un muestreo lento. Después de bastantes pruebas creo que un buen balance entre robustez y velocidad es usar una velocidad de refresh de 70ms y 9 niveles de color, lo cual permite enviar alrededor de 5 bytes/seg.
 
---OTRA IDEA:
-  + Pulir muy bien la deteccion de cambios y la tolerancia.
-  + Al principio de cada paquete mando todos los valores (17)
-  + Cuando detecto una escalera de 17 valores reseteo mi calibrado a ese
-  + Mantengo esa calibracion hasta que termine de leer el paquete (128 pulsos?)
-  + Esto resetea la escalera en cada paquete.
-  De esta manera si el usuario pone el kit antes de darle play, se garantiza la escalera adecuada
-  y un flujo de 128 bits seguros.
+La escala de grises que se utiliza debe ser lineal para que la diferencia entre cada nivel sea la misma (o lo mas cercano posible a esto). El problema es que los monitores realizan una corrección de gama diseñada para que el ojo humano, cuya sensibilidad no es lineal (vemos mucho más detalle en los tonos obscuros). Para que nuestro sensor de luz reciba una escala lineal tenemos que revertir esta corrección:
+
+ 	math.pow(value, (1.0 / gamma))
+
+ 	donde value va de 0 (negro) 1 (blanco)
+
+La gamma correction varia de sistema a sistema, normalmente en un rango desde 1.8 (mac) hasta 2.2 (win) para aproximarnos lo mas posible a ambos sistemas usamos 2.0
+https://en.wikipedia.org/wiki/Gamma_correction
+
+Los valores posibles se manejan asi:
+	levelNum 	= número total de niveles posibles.
+	REPEAT 		= el último valor en levelNum (blanco)
+	MAX			= el ultimo valor aceptado (uno menos que levelNum)
+	MIN 		= el primer valor aceptado (negro)
+
+los colores posibles si usamos una escala de 8 valores son:
+	0,1,2,3,4,5,6,7  --  son los valores aceptados
+	8  --  es el valor de repeticion REPEAT
+
+Para repetir un valor se utiliza el color MAX (blanco):
+	0-8 	= 0 0
+	0-8-0 	= 0 0 0
+
+La secuencia de inicio INIT (en la cual se incluye una de calibrado) es:
+	MAX-REPEAT-RAMP(levelNum)-MIN-REPEAT-MIN-REPEAT
+	780123456780808
+
+Si pasa DOG_TIMEOUT (en milisegundos) sin recibir nada se reinicia el proceso y se pone en espera del ciclo de INIT (y calibrado).
+
+Despues de esto se envia STX (start text) seguido de el mensaje en ASCII en sistema octal con tres digitos para cada caracter, sólo se incluye el leading zero para completar los tres digitos para cada caracter enviado.
+
+Para poder integrar más comandos en el futuro por esta vía se usa un caracter newLine (\n) octal - 012, para separar el commando, y los diferentes parametros. Para terminar el texto se envia ETX (end of text) octal - 003 después el CRC y al final EOT (end of transmission) octal - 004.
+De esta manera queda:
+	STXcomando\nparametro1\nparametro2\nparametroN\nETXCRCEOT
+
+Falta implementar el calculo y envio del CRC entre el ETX y el EOT.
+
+Para el comando de envio de credenciales, al que llamaremos auth:
+
+	INITSTXauth\nmySSID\nmyPASS\nmyTOKEN\nETXCRCEOT
+
+El CRC debe incluir  el commando + los parametros, (todo lo que se encuentre entre STX y ETX) lo cual no debe ser mayor a 1024 bytes.
+
+
+FLOW
+1. El usuario captura el ssid y password en un formulario al lado de una imagen que le indica donde colocar el sck en la pantalla.
+2. Coloca el SCK pegado a la pantalla en la imagen y pica espacio o un mouse click o lo que sea... y el javascript hace lo siguiente:
+	1. Envia la secuencia de inicio seguida de el mensaje, crc, etc
+	2. Si la recepcion de el mensaje es exitosa se da feedback con el led (verde?)
+	3. Enseguida se intenta la conexión al wifi y si es exitosa se sale de apmode y se da feedback con el led (azul) además de avisar a la plataforma via MQTT para que con un webSocket el usuario reciba aviso de que el sync fue exitoso.
+	4. A partir de aqui la configuración e interaccion con el kit sera atraves de la plataforma via MQTT.
+
+	
+--Darle al codigo forma de libreria
+--Pensar de que manera regresar los resultados (podria ser un struct)
+--integrarlo en el firmware
+--documentar el codigo
+--hacer un documento en hackmd con todo esto
+--probar que todos los caracteres posibles (UTF8??, ASCII printable??) se puedan enviar y recibir correctamente.
 
  */
 
@@ -41,157 +87,263 @@
   * 
   * parece que la mejor opcion es 0xFB o FA a 70 ms --> 8 chars de 7 bits x seg. (17 valores)
   */
-#define TIME0  0xFA
+#define TIME0  0xFB
 
-float newLevel = 0;
-float oldLevel = 0;
-float levelSize = 0;
-float tolerance = 0;
+float newReading = 0;
+float OldReading = 0;
+int repetition = 0;
+float tolerance = 0.30;  //podria valer la pena ajustar la tolerancia al calibrar
 
-#define levelNum 17
+//asi como esta funciona perfecto con 13 niveles! (a 500 ms) ;-)
 
+#define levelNum 9
 float levels[levelNum];
+int newLevel = 0;
+int oldLevel = 0;
 
-float maxLevel = 0;
-float minLevel = 9999;
+String newChar = "0";
+String buffer;
+String payload[8];
 
-bool endDetected = false;
+float localCheckSum = 0;
 
-int buff = 0;
-int oldBuff = 1;
+float watchDOG = 0;
+#define DOG_TIMEOUT 2000 // If no valid char is received in this timeout we restart and calibrate again.
 
-
+bool STX = false;	//start text
+bool EOT = false;	//end of transmission
 
 void setup() {
-  Wire.begin(); 
-  deb.begin(115200);
-  delay(2000);
-  ledColor(0,0,255);
+  	Wire.begin(); 
+  	deb.begin(115200);
+  	delay(2000);
+  	ledColor(255,0,0);
+  	pinMode(7, INPUT);
+	feedDOG();
 }
 
 void loop() {
-  readLight();
+
+	if (calibrate()) {
+
+		EOT = false;
+		STX = false;
+
+		while (!EOT) {
+			char b = getChar();
+
+			//feed the dog only with valid chars
+			if (b > 0 && b < 255) feedDOG();
+
+			// Start of text signal
+			if (b == 0x02) {
+				deb.println("Starting...");
+				localCheckSum = 0;
+				buffer = "";
+				STX = true;
+			}
+			// End of text signal
+			else if (b == 0x03) {
+				STX = false;
+				
+				if (checksum()) {
+					deb.println("Finished!!!");
+					ledColor(0,255,0);
+				}
+			}
+			// End of transmission signal
+			else if (b == 0x04) {
+				EOT = true;
+				break;
+			}
+
+			if (STX) {
+
+				// if char its not a newline
+				if (b != 0x0A) {
+					buffer.concat(b);
+				} else {
+
+					// feed the dog every newline
+					// feedDOG();
+					//deberia alimentar al dog cada vez que reciba un char valido
+					//checar la tabla ascii para ver como implementarlo!
+					// asi podria tener un timeout mucho mas corto.
+
+					// print received line
+					deb.println(buffer);
+					buffer = "";
+				}
+			} else {
+				//capture, calculate and verify CRC
+			}
+
+			
+		}
+	}
 }
 
+float getValue() {
 
-/**
-    Sets the min, max and size values for the light range to use in the communication.
-    For this function to work it needs a repetitive transition between min and max brigthness levels. 
+	while (true) {	//CAMBIAR hay que poner un timeout o algo que impida quedarse atorado aqui...
 
-    @return 
-*/
-boolean readLight() {
+		//obtenemos un reading del sensor
+		newReading = getLight();
 
-  int rep = 0;
-  oldLevel = 0;
-  
-  while (!endDetected){
-    newLevel = getLight();
-    if (newLevel == oldLevel) {
-      rep++;
-    } else {
-      rep = 0;
-    }
-    delay(2);
+		//check if we need to trigger reset
+		if (dogBite()) {
+			if (!EOT) {
+				EOT = true;
+				return -1;
+			}
+		}
 
-/*
- * El problema de no usar repetición es que las lecturas espurias 
- * (las que se obtienen de leer durante los cambios de color) ensucian mucho el calibrado.
- * Al exigir que un valor valido se presente mas de una vez limpiamos la mayoria del ruido.
- * La desventaja es que el pulso de cada color debe durar el periodo de lectura * las repeticiones
- * Aparenetemente el aumentar las repeticiones a mas de una no mejora nada, esto debe ser
- * por que las lecturas espurias nunca se presentan mas de una vez.
- * CONCLUSION: rep == 1 es la mejor opcion. (el doble de tiempo de lectura)
+		// Si la diferencia con el valor anterior es menor a la tolerancia lo consideramos repeticion
+		if (abs(newReading - OldReading) < tolerance) {
+			repetition++;
+	    } else {
+	    	repetition = 0;
+	    }
+
+	    //esperamos a que se recupere el sensor de luz
+	    delay(2);
+
+	    // guardamos el valor viejo
+	    OldReading = newReading;
+
+	    // La lectura es valida si lleva una repeticion (ni mas ni menos)
+	    if (repetition == 1) {
+	    	return newReading;
+	    }
+
+	}
+}
+
+bool calibrate() {
+
+	int newLevel = 0;
+	float oldValue = 0;
+	float currentValue = 0;
+
+	while (true) {		
+
+		//get new value
+		currentValue = getValue();
+
+		// deb.print(newLevel);
+
+		// I value is bigger than previous we up one level
+		if (currentValue > oldValue) {
+			newLevel ++;
+		} else {
+			// If we reach the levelnum we are done!
+			if (newLevel + 1 == levelNum) {
+				deb.println("Calibrated!!");
+				return true;
+			} 
+
+			// finished or error we start again
+			newLevel = 0;
+		}
+
+		//we assign the value to this level for future readings
+		levels[newLevel] = currentValue;
+		// save the old value for comparison
+		oldValue = currentValue;
+	}
+
+}
+
+/* 
+ *
  */
-    if (rep == 1) {
+char getChar() {
+	
+	while(!EOT) {
 
-      /*
-       * calibra los limites de la escala de grises 
-       * El problema a resolver es como recuperar el nivel maximo 
-       * una vez que detecto un valor muy alto, que esta mas lejos del valor real que la tolerancia.
-       * Hay que hacer esto sin meter problemas de bajar el maximo rutinariamente.
-       * 
-       * Hay que forzar la aparicion de min y max en cada paquete y
-       * siempre reseteamos min y max cada vez que terminemos con un paquete
-       * 
-       */
-      if (minLevel + tolerance > newLevel) {
-        minLevel = (minLevel + newLevel) / 2;
-        levelSize = (maxLevel - minLevel) / (levelNum - 1);
-        tolerance = levelSize * 0.49; 
-//      } else if (maxLevel - tolerance < newLevel) {
-      } else if (abs(maxLevel - newLevel) < tolerance || newLevel > maxLevel) {
-        maxLevel = (maxLevel + newLevel) / 2;
-        levelSize = (maxLevel - minLevel) / (levelNum - 1);
-        tolerance = levelSize * 0.49; 
-      }
-
-
-      for(int i=0; i<levelNum; i++) {
-
-        /*
-         * Solo considera validos los valores cuando hay un cambio en ellos
-         * De esta manera no se requiere una señal de clock ni un timming fijo
-         * Lo unico que se tiene que respetar es el tiempo minimo que depende de TIME0
-         * Para repetir el mismo valor usamos el ultimo bit (ej. 17) intercalandolo con el que queremos repetir
-         * ej. (5 es el ultimo)
-         * 11123332 = 1232
-         * 15123532 = 11123332
-         * Esto es si encontramos el ultimo valor asumimos otra lectura valida del caracter anterior.
-         */
-        if (newLevel - tolerance < levels[i] && newLevel + tolerance > levels[i]) {
-          buff = i;
-          if (buff != oldBuff) {  //si hay un cambio en el valor, lo considero valido
-            oldBuff = buff;
-            deb.println(buff+1);
-          } 
-        }
-
-        //agrega valores al diccionario y calibrado permanente
-        //si es igual no hace nada
-        if (newLevel == levels[i]) {
-          break;
-        //si el valor en la table es cero lo substituye
-        } else if (levels[i] == 0.0) {
-          levels[i] = newLevel; 
-          break;
-        //si el valor es similar lo promedia
-        } else if (newLevel - tolerance < levels[i] && newLevel + tolerance > levels[i]) {
-          levels[i] = (levels[i] + newLevel) / 2; 
-          break;
-        //si el valor es menor, lo inserta y recorre los demas a la derecha
-        } else if (levels[i] - tolerance > newLevel) {
-          //recorre a la derecha
-          for (int u=levelNum; u>i; u++ ) {
-            levels[u] = levels[u-1];
-          }
-          levels[i] = newLevel;
-          break;
-        }
-      }
-    }
-    oldLevel = newLevel;
-
-
-    /*
-     * Con la tecnica de insertar los mas chicos y recorrer a la derecha
-     * el ultimo nivel queda mas pequeño que el maximo induciendo errores
-     */
-    // deb.print("min: ");
-    // deb.print(minLevel);
-    // deb.print(" first: ");
-    // deb.print(levels[0]);
-    // deb.print(" max: ");
-    // deb.print(maxLevel);
-    // deb.print(" last: ");
-    // deb.print(levels[levelNum-1]);
-    // deb.print(" size: ");
-    // deb.println(levelSize);
-
-
-  }
+		String octalString = "0";
+		
+		for (int i = 0; i < 3; ++i)	{
+			octalString.concat(getLevel(getValue()));
+		}
+		
+		//add the value to checksum
+		int newInt = strtol(octalString.c_str(), NULL, 0);
+		if (STX) localCheckSum = localCheckSum + newInt;
+		
+		char newChar = newInt;
+		// deb.print(octalString);
+		// deb.print(" ==> ");
+		// deb.println(newChar);
+		return newChar;
+	}
 }
 
+
+int getLevel(float value) {
+	// busca en todos los niveles
+	for (int i=0; i<levelNum; i++) {
+		// el primero de los niveles que este mas cerca del valor que la tolerancia
+		if ( abs(levels[i] - value) < tolerance ) {
+
+			// si el nivel es el ultimo hacemos repeticion del anterior
+			if (i+1 == levelNum) {
+				return oldLevel;
+			}
+
+			//save level for future comparisons
+			oldLevel = i;
+
+			//return current level
+			return i;
+		}
+	}
+}
+
+
+bool dogBite() {
+	if (millis() - watchDOG > DOG_TIMEOUT) {
+		restart();
+		return true;
+	}
+	return false;
+} 
+
+void feedDOG() {
+	watchDOG = millis();
+}
+
+
+bool checksum() {
+	String sum = "";
+
+	for (int i = 0; i < 6; ++i)	{
+		sum.concat(getLevel(getValue()));
+	}
+	
+	int receivedInt = strtol(sum.c_str(), NULL, 8);
+
+	deb.print("checksum received: ");
+	deb.print(receivedInt);
+	deb.print("   calculated: ");
+	// We need to remove the last char (ETX-003) thats not part of the checksum
+	// but is cheaper to remove it here than to filter its adition.
+	deb.println(localCheckSum - 3);
+
+	if (receivedInt == localCheckSum - 3) {
+		deb.println("checksum OK");
+		return true;
+	} 
+
+	deb.println("checksum ERROR!!");
+	return false;
+}
+
+void restart() {
+	deb.println("Restarted!! waiting for calibration signal...");
+	// EOT = true;
+	feedDOG();
+}
 
 /**
     Gets a raw reading from BH1730 light sensor. The resolution and speed depends on TIME0
