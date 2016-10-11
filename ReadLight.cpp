@@ -57,74 +57,36 @@ FLOW
 	3. Enseguida se intenta la conexión al wifi y si es exitosa se sale de apmode y se da feedback con el led (azul) además de avisar a la plataforma via MQTT para que con un webSocket el usuario reciba aviso de que el sync fue exitoso.
 	4. A partir de aqui la configuración e interaccion con el kit sera atraves de la plataforma via MQTT.
 
-	
---Darle al codigo forma de libreria
---Pensar de que manera regresar los resultados (podria ser un struct)
---integrarlo en el firmware
---documentar el codigo
---hacer un documento en hackmd con todo esto
---probar que todos los caracteres posibles (UTF8??, ASCII printable??) se puedan enviar y recibir correctamente.
+--en el struc devolver ok (true or false), un array de strings y si se pide debug un log (pensar como hacerlo ligero)
+-- Integrarlo en el firmware
+-- Substituir los outputs por serial por una especie de log (remember asciinema)
+-- documentar el codigo
+-- hacer un documento en hackmd con todo esto
+-- probar que todos los caracteres posibles (UTF8??, ASCII printable??) se puedan enviar y recibir correctamente.
 
  */
 
 #include "ReadLight.h"
-// #include <Wire.h>
-
-// #define myOut SerialUSB
-
-// #define BH1730               0x29    // Direction of the light sensor
-
- /*    
-  * El numero de valores es proporcional al brillo/contraste de la pantalla
-  * 0xA0 (~3200 valores en 260 ms)
-  * 0xB0 (~2100 valores en 220 ms)
-  * 0xC0 (~1300 valores en 180 ms)
-  * 0xD0 (~800 valores en 130 ms)
-  * 0xE0 (~350 valores en 88 ms)
-  * 0xF0 (~80 valores en 45 ms)
-  * 0xFA (12 valores en 18 ms)
-  * 0XFB (8 valores en 15 ms)
-  * 
-  * parece que la mejor opcion es 0xFB a 70 ms --> (9 valores)
-  */
-// #define TIME0  0xFB
 
 
-// float newReading = 0;
-// float OldReading = 0;
-// int repetition = 0;
-// float tolerance = 0.30;  //podria valer la pena ajustar la tolerancia al calibrar
-
-// #define levelNum 9
-// float levels[levelNum];
-// int newLevel = 0;
-// int oldLevel = 0;
-
-// String newChar = "0";
-// String buffer;
-
-// float localCheckSum = 0;
-
-// float watchDOG = 0;
-// #define DOG_TIMEOUT 2000 // If no valid char is received in this timeout we restart and calibrate again.
-
-// bool TransmittingText = false;	// This is true after STX (start text) and false after ETX (end text)
-// bool EOT = false;	// End of transmission, true when transmission ends or watchdog kicks in.
-
+/*
+ *  Default constructor
+ */
 void ReadLight::setup() {
-  	Wire.begin();
-  	myOut.begin(115200);
-  	// ledColor(255,0,0);
+    Wire.begin();
     feedDOG();          // Start timer for watchdog
 }
 
 /*
- *
- *
+ *  Starts the monitoring of light sensor and process data
  */
 dataLight ReadLight::read() {
 
-	if (calibrate()) {
+  results.ok = false;
+  results.lineIndex = 0;
+  memset(results.lines, 0, sizeof(results.lines));
+
+  if (calibrate()) {
 
 		EOT = false;
 		TransmittingText = false;
@@ -139,7 +101,7 @@ dataLight ReadLight::read() {
 
 			// Start of text signal
 			if (b == 0x02) {
-				myOut.println("Starting...");
+				myOut.println("STX...");
 				localCheckSum = 0;
 				buffer = "";
 				TransmittingText = true;
@@ -148,10 +110,16 @@ dataLight ReadLight::read() {
 			else if (b == 0x03) {
 				TransmittingText = false;
 				
+        // Verify checksum and finish
 				if (checksum()) {
 					myOut.println("Finished!!!");
-					// ledColor(0,255,0);
-				}
+          results.ok = true;
+          return results;
+				} else {
+          //aqui hay que retornar un error
+          results.ok = false;
+          return results;
+        }
 			}
 			// End of transmission signal
 			else if (b == 0x04) {
@@ -161,31 +129,32 @@ dataLight ReadLight::read() {
 
 			if (TransmittingText) {
 
-				// if char its not a newline
+				// If received char its not a newline, we store it in buffer
 				if (b != 0x0A) {
 					buffer.concat(b);
 				} else {
 
-					// Aqui myOuto guardar el buffer
-          myOut.println("");
-					// myOut.println(buffer);
+          // If we receive a new line store it in resultas and restart buffer
+          results.lines[results.lineIndex] = buffer;
+          results.lineIndex++;
 					buffer = "";
 				}
-			} else {
-				//capture, calculate and verify CRC
-			}
-
-			
+			} 
 		}
 	}
+  results.ok = false;
+  return results;
 }
 
+
+
 /*
- *
- *
+ *  Check if we need a restart
+ *  @return True if timeout has been reached
  */
 bool ReadLight::dogBite() {
 	if (millis() - watchDOG > DOG_TIMEOUT) {
+    // SerialUSB.print(" -- ");
 		myOut.println("Restarted!! waiting for calibration signal...");
     feedDOG();
 		return true;
@@ -194,8 +163,7 @@ bool ReadLight::dogBite() {
 } 
 
 /*
- *
- *
+ *  Avoid the watchdog timer to trigger a restart()
  */
 void ReadLight::feedDOG() {
 	watchDOG = millis();
@@ -203,13 +171,15 @@ void ReadLight::feedDOG() {
 
 
 /*
- *
- *
+ *  Gets the checksum from sender and compare it with the calculated from received text.
+ *  @return True is checksum is OK, False otherwise
  */
 bool ReadLight::checksum() {
 	String sum = "";
 
+  // Gets checksum digits (6) sended from the screen
 	for (int i = 0; i < 6; ++i)	{
+    // SerialUSB.print("c");
 		sum.concat(getLevel(getValue()));
 	}
 	
@@ -220,8 +190,9 @@ bool ReadLight::checksum() {
 	// myOut.print("   calculated: ");
   // myOut.println(localCheckSum - 3);
     
-	// We need to remove the last char (ETX-003) thats not part of the checksum
-	// but is cheaper to remove it here than to filter its adition.
+	// We need to remove the last char (ETX-003) because it is not part of the checksum
+	// Is cheaper to remove it here than to filter its adition.
+  // Compare the calculated checksum and the received from sender
 	if (receivedInt == localCheckSum - 3) {
 		myOut.println("checksum OK");
 		return true;
@@ -233,40 +204,49 @@ bool ReadLight::checksum() {
 
 
 /*
- *
- *
+ *  Calibrates level color creating a table with valid level values from 0 to levelNum.
+ *  For this process to work we need the screen to send colors from black to white with all grey levels one by one.
+ *  @return True if succsesfull calibration.
  */
 bool ReadLight::calibrate() {
 
   int newLevel = 0;
   float oldValue = 0;
   float currentValue = 0;
+  feedDOG();
 
-  while (true) {    
+  while (true) {   
 
-    //get new value
+    // Get new value
+    // SerialUSB.println("a");
     currentValue = getValue();
+    // SerialUSB.println("A");
 
     // myOut.print(newLevel);
 
-    // I value is bigger than previous we up one level
+    // I value is bigger than previous go up one level
     if (currentValue > oldValue) {
       newLevel ++;
     } else {
       // If we reach the levelnum we are done!
       if (newLevel + 1 == levelNum) {
+
         myOut.println("Calibrated!!");
+        
+        // Keep the watchdog timer cool
         feedDOG();
+
         return true;
       } 
 
-      // finished or error we start again
-      newLevel = 0;
+      // no calibration sequence found return false
+      return false;
     }
 
-    //we assign the value to this level for future readings
+    // We assign the value to this level for future readings
     levels[newLevel] = currentValue;
-    // save the old value for comparison
+
+    // Save the old value for next loop comparison
     oldValue = currentValue;
   }
 
@@ -275,106 +255,135 @@ bool ReadLight::calibrate() {
 
 
 /* 
- *
- *
+ *  Gets a char from 3 valid values obtainde from light sensor
+ *  @return obtained char
  */
 char ReadLight::getChar() {
   
   while(!EOT) {
 
+    // Leading 0 indicates octal representation
     String octalString = "0";
     
+    // Ask for values until we have the 3 we need for an octal ASCII char
     for (int i = 0; i < 3; ++i) {
+      // SerialUSB.println("h");
       octalString.concat(getLevel(getValue()));
     }
     
-    //add the value to checksum
+    // Add value to checksum only if we are receiving the text portion of the payload
     int newInt = strtol(octalString.c_str(), NULL, 0);
     if (TransmittingText) localCheckSum = localCheckSum + newInt;
     
+    // Convert ASCII to char
     char newChar = newInt;
+
     // myOut.print(octalString);
     // myOut.print(" ==> ");
     // myOut.println(newChar);
+
+    // Return the obtained char
     return newChar;
   }
+  return 0x00;
 }
 
 
 
 /*
  *  Gets a valid level from a lightsensor value between the grey levels
+ *  @params 
  *  @return a grey level
  */
 int ReadLight::getLevel(float value) {
-  // busca en todos los niveles
+  // Iterate over levels testing new value
   for (int i=0; i<levelNum; i++) {
-    // el primero de los niveles que este mas cerca del valor que la tolerancia
+    // If level is closer than the tolerance
     if ( abs(levels[i] - value) < tolerance ) {
 
-      // si el nivel es el ultimo hacemos repeticion del anterior
+      // If we detect last level (REPEAT value) return the previous level
       if (i+1 == levelNum) {
         return oldLevel;
       }
 
-      //save level for future comparisons
+      // Save level for future comparisons
       oldLevel = i;
 
-      //return current level
+      // Return matching level
       return i;
     }
   }
+  return -1;
 }
 
 
 
 /*
- * Checks if the value has changed and if it stays stable for at least two readings it is considered a valid value
- * @return a validated light sensor value 
+ *  Checks if the value has changed and if it stays stable for at least two readings it is considered a valid value
+ *  @return a validated light sensor value 
  */
 float ReadLight::getValue() {
 
   while (true) {  //CAMBIAR hay que poner un timeout o algo que impida quedarse atorado aqui... podria ser while(!EOT)
 
-    //obtenemos un reading del sensor
+    // SerialUSB.print("v");
+
+    // Getting reading from light sensor
     newReading = getLight();
 
-    //check if we need to trigger reset
+    //check if we need to restart.
     if (dogBite()) {
       if (!EOT) {
+        // SerialUSB.print("w");
         EOT = true;
+        //break;
       }
+      return levelNum + 1;
     }
 
-    // Si la diferencia con el valor anterior es menor a la tolerancia lo consideramos repeticion
+    // If the new value difference from previous is less than tolerance we use it.
     if (abs(newReading - OldReading) < tolerance) {
       repetition++;
-      } else {
+    } else {
         repetition = 0;
-      }
+    }
 
-      //esperamos a que se recupere el sensor de luz
-      delay(2);
+    // Wait for light sensor to recover
+    delay(2);
 
-      // guardamos el valor viejo
-      OldReading = newReading;
+    // Save old reading for future comparisons
+    OldReading = newReading;
 
-      // La lectura es valida si lleva una repeticion (ni mas ni menos)
-      if (repetition == 1) {
-        return newReading;
-      }
-
+    // We need ONE repetition in reading to consider it valid.
+    if (repetition == 1) {
+      return newReading;
+    }
   }
+
+  
 }
 
 
 
-/**
-    Gets a raw reading from BH1730 light sensor. The resolution and speed depends on TIME0
-
-    @return raw reading of the light sensor
-*/
+/*
+ *   Gets a raw reading from BH1730 light sensor. The resolution and speed depends on TIME0
+ *   @return raw reading of the light sensor
+ */
 float ReadLight::getLight() {
+
+   /*    
+  * TIME0 posible values, more time = more resolution
+  * 0xA0 (~3200 values in 260 ms)
+  * 0xB0 (~2100 values in 220 ms)
+  * 0xC0 (~1300 values in 180 ms)
+  * 0xD0 (~800 values in 130 ms)
+  * 0xE0 (~350 values in 88 ms)
+  * 0xF0 (~80 values in 45 ms)
+  * 0xFA (12 values in 18 ms)
+  * 0XFB (8 values in 15 ms)
+  * 
+  * The best working option is 0xFB: using 9 values and printing output from screen at intervals of 70ms
+  */
 
   uint8_t GAIN0 = 0x00;     //x1
   uint8_t CONTROL = 0x07;  //continous mode only type 0 measurement 
@@ -413,22 +422,3 @@ float ReadLight::getLight() {
 
   return Lx;
 }
-
-
-/*------------------------------ BORRAR -----------------------------*/
-//LED
-// #define RED     6
-// #define GREEN   12
-// #define BLUE    10
-
-// void ledColor(uint16_t red, uint16_t green, uint16_t blue){
-  
-//   //up limit
-//   if (red > 255) red == 255;
-//   if (green > 255) green == 255;
-//   if (blue > 255) blue == 255;
-  
-//   analogWrite(RED, abs(red - 255));
-//   analogWrite(GREEN, abs(green - 255));
-//   analogWrite(BLUE, abs(blue - 255));
-// }

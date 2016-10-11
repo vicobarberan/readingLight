@@ -7,19 +7,23 @@
 #define myOut SerialUSB
 
 struct dataLight {
-	String comm;
-	String param[8];
+	bool ok = false;
+	int lineIndex = 0;
+	String lines[8];
 };
 
 class ReadLight {
 public:
 	void setup();
 	dataLight read();
+	// enum debugLog {  };
 
 private:
 
+	dataLight results;
+
 	int BH1730 = 0x29;			// Light sensor I2C address
-	int TIME0 = 0xFB;			//
+	uint8_t TIME0 = 0xFB;			//
 
 	// Variables to manage sensor readings
 	float newReading = 0;		// Here we store the light sensor new readings
@@ -44,7 +48,7 @@ private:
 
 	// Watchdog variables
 	float watchDOG = 0;			// Variable for the watchdog timeout
-	float DOG_TIMEOUT = 2000;	// If no valid char is received in this timeout we restart and calibrate again.
+	float DOG_TIMEOUT = 3000;	// If no valid char is received in this timeout we restart and calibrate again.
 
 	// State variables
 	bool TransmittingText = false;	// This is true after receiving STX char (start text) and false after ETX char (end text)

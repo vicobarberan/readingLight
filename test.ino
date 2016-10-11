@@ -4,12 +4,19 @@ ReadLight readLight;
 
 void setup() {
 
+	SerialUSB.begin(115200);
 	readLight.setup();
-	readLight.read();
 }
 
 void loop() {
 
+	dataLight results;
+
+	while (!results.ok) results = readLight.read();
+
+	for (int i=0; i<results.lineIndex; i++) {
+		SerialUSB.println(results.lines[i]);
+	}
 
 }
 

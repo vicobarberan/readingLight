@@ -209,16 +209,16 @@ while True:
 
 	# There should be a pause of more time than the watchdog timeout to give the kit time to restart after errors.
 	paint(MIN)
-	time.sleep(2.5)
+	time.sleep(1.5)
 
 	checksum = 0
 	INIT()
 
 	STX()
 	sendWord("auth\n")
-	sendWord("myLong--SSID$$\n")
-	sendWord("mylongestPASS with spaces\n")
-	sendWord("1234567890123456789012345678901\n")
+	sendWord("mySSID\n")
+	sendWord("myPASS\n")
+	sendWord("myTOKEN\n")
 	ETX()
 
 	sendChecksum()
