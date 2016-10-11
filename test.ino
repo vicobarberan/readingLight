@@ -15,8 +15,15 @@ void loop() {
 	while (!results.ok) results = readLight.read();
 
 	for (int i=0; i<results.lineIndex; i++) {
-		SerialUSB.println(results.lines[i]);
+		SerialUSB.print(results.lines[i]);
+		SerialUSB.print(", ");
 	}
+	SerialUSB.println("");
+	for (int i=0; i<results.logIndex; i++) {
+		SerialUSB.print(results.log[i]);
+		SerialUSB.print(", ");
+	}
+	SerialUSB.println("");
 
 }
 

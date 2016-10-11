@@ -4,19 +4,22 @@
 #include <Arduino.h>
 #include <Wire.h>
 
-#define myOut SerialUSB
+enum debugLog { STARTING, CALIBRATED, STX_CHAR, NEW_LINE, ETX_CHAR, CHECKSUM_OK, CHECKSUM_ERROR, EOT_CHAR, WATCHDOG_TIMEOUT };
+
+const int MAX_LOG = 20;
 
 struct dataLight {
-	bool ok = false;
+	bool ok = false;			// Bolean true if everything was OK
+	String lines[8];			// Array of strings to save the lines received
 	int lineIndex = 0;
-	String lines[8];
+	debugLog log[MAX_LOG];			// Keeps 20 messages of debug log
+	int logIndex = 0;
 };
 
 class ReadLight {
 public:
 	void setup();
 	dataLight read();
-	// enum debugLog {  };
 
 private:
 
@@ -34,7 +37,7 @@ private:
 	// Variables to manage screen color levels
 	int levelNum = 9;			// Number of different grey levels the sensor can read (the screen should use the same number)
 
-		///AQUI HAY QUE PONER levelnum en vez de 9 NO ME ACUERDO COMO
+		///AQUI HAY QUE PONER levelnum en vez de 9 NO ME ACUERDO COMO CONSTINT
 	float levels[9];			// Array for saving the sensor reading for each level during calibration
 	int newLevel = 0;			// Stores the new detected level
 	int oldLevel = 0;			// Variable for storing previous detected level
@@ -62,7 +65,7 @@ private:
 	bool checksum();
 	void feedDOG();
 	bool dogBite();
-
+	void log(debugLog message);
 };
 
 

@@ -1,11 +1,11 @@
 
 /*
  * 
-El sistema detecta los cambios de color, de esta manera no es necesaria una señal de reloj ni ninguna sincronización entre el kit y la pantalla. La señal se puede enviar a tan lento como se quiera, el único limite es que no puede ir más rápido que la velocidad de muestreo que tiene el sensor de luz. De hecho myOute ir a una velocidad de alrededor de 3 veces la velocidad de muestreo del sensor, el cual para aceptar una lectura como válida myOute capturarla por lo menos 2 veces.
+El sistema detecta los cambios de color, de esta manera no es necesaria una señal de reloj ni ninguna sincronización entre el kit y la pantalla. La señal se puede enviar a tan lento como se quiera, el único limite es que no puede ir más rápido que la velocidad de muestreo que tiene el sensor de luz. De hecho debe ir a una velocidad de alrededor de 3 veces la velocidad de muestreo del sensor, el cual para aceptar una lectura como válida debe capturarla por lo menos 2 veces.
 
 Los colores a usar van de 0 (negro) a levelnum (blanco) el blanco se utiliza para indicar una repetición de el color anterior. La sensibilidad de el sensor disminuye mientras más rápido sea el muestreo y aumenta con un muestreo lento. Después de bastantes pruebas creo que un buen balance entre robustez y velocidad es usar una velocidad de refresh de 70ms y 9 niveles de color, lo cual permite enviar alrededor de 5 bytes/seg.
 
-La escala de grises que se utiliza myOute ser lineal para que la diferencia entre cada nivel sea la misma (o lo mas cercano posible a esto). El problema es que los monitores realizan una corrección de gama diseñada para que el ojo humano, cuya sensibilidad no es lineal (vemos mucho más detalle en los tonos obscuros). Para que nuestro sensor de luz reciba una escala lineal tenemos que revertir esta corrección:
+La escala de grises que se utiliza debe ser lineal para que la diferencia entre cada nivel sea la misma (o lo mas cercano posible a esto). El problema es que los monitores realizan una corrección de gama diseñada para que el ojo humano, cuya sensibilidad no es lineal (vemos mucho más detalle en los tonos obscuros). Para que nuestro sensor de luz reciba una escala lineal tenemos que revertir esta corrección:
 
  	math.pow(value, (1.0 / gamma))
 
@@ -46,7 +46,7 @@ Para el comando de envio de credenciales, al que llamaremos auth:
 
 	INITTransmittingTextauth\nmySSID\nmyPASS\nmyTOKEN\nETXCRCEOT
 
-El CRC myOute incluir  el commando + los parametros, (todo lo que se encuentre entre TransmittingText y ETX) lo cual no myOute ser mayor a 1024 bytes.
+El CRC debe incluir  el commando + los parametros, (todo lo que se encuentre entre TransmittingText y ETX) lo cual no debe ser mayor a 1024 bytes.
 
 
 FLOW
@@ -57,20 +57,18 @@ FLOW
 	3. Enseguida se intenta la conexión al wifi y si es exitosa se sale de apmode y se da feedback con el led (azul) además de avisar a la plataforma via MQTT para que con un webSocket el usuario reciba aviso de que el sync fue exitoso.
 	4. A partir de aqui la configuración e interaccion con el kit sera atraves de la plataforma via MQTT.
 
---en el struc devolver ok (true or false), un array de strings y si se pide debug un log (pensar como hacerlo ligero)
 -- Integrarlo en el firmware
--- Substituir los outputs por serial por una especie de log (remember asciinema)
 -- documentar el codigo
 -- hacer un documento en hackmd con todo esto
 -- probar que todos los caracteres posibles (UTF8??, ASCII printable??) se puedan enviar y recibir correctamente.
+-- Improve log system in the future.
 
  */
 
 #include "ReadLight.h"
 
-
 /*
- *  Default constructor
+ *  Setup must be executed before read
  */
 void ReadLight::setup() {
     Wire.begin();
@@ -82,9 +80,12 @@ void ReadLight::setup() {
  */
 dataLight ReadLight::read() {
 
+  log(STARTING);
+
   results.ok = false;
   results.lineIndex = 0;
   memset(results.lines, 0, sizeof(results.lines));
+  memset(results.log, 0, sizeof(results.log));
 
   if (calibrate()) {
 
@@ -94,25 +95,23 @@ dataLight ReadLight::read() {
 		while (!EOT) {
 			char b = getChar();
 
-      myOut.print(b);
-
 			//feed the dog only with valid chars
 			if (b > 0 && b < 255) feedDOG();
 
 			// Start of text signal
 			if (b == 0x02) {
-				myOut.println("STX...");
+        log(STX_CHAR);
 				localCheckSum = 0;
 				buffer = "";
 				TransmittingText = true;
-			}
-			// End of text signal
-			else if (b == 0x03) {
+
+			} else if (b == 0x03) {
+        // End of text signal
+        log(ETX_CHAR);
 				TransmittingText = false;
 				
         // Verify checksum and finish
 				if (checksum()) {
-					myOut.println("Finished!!!");
           results.ok = true;
           return results;
 				} else {
@@ -123,6 +122,7 @@ dataLight ReadLight::read() {
 			}
 			// End of transmission signal
 			else if (b == 0x04) {
+        log(EOT_CHAR);
 				EOT = true;
 				break;
 			}
@@ -131,6 +131,7 @@ dataLight ReadLight::read() {
 
 				// If received char its not a newline, we store it in buffer
 				if (b != 0x0A) {
+          log(NEW_LINE);
 					buffer.concat(b);
 				} else {
 
@@ -154,8 +155,7 @@ dataLight ReadLight::read() {
  */
 bool ReadLight::dogBite() {
 	if (millis() - watchDOG > DOG_TIMEOUT) {
-    // SerialUSB.print(" -- ");
-		myOut.println("Restarted!! waiting for calibration signal...");
+    log(WATCHDOG_TIMEOUT);
     feedDOG();
 		return true;
 	}
@@ -170,6 +170,12 @@ void ReadLight::feedDOG() {
 }
 
 
+void ReadLight::log(debugLog message) {
+  results.log[results.logIndex] = message;
+  if (results.logIndex < MAX_LOG) results.logIndex++;
+}
+
+
 /*
  *  Gets the checksum from sender and compare it with the calculated from received text.
  *  @return True is checksum is OK, False otherwise
@@ -179,25 +185,19 @@ bool ReadLight::checksum() {
 
   // Gets checksum digits (6) sended from the screen
 	for (int i = 0; i < 6; ++i)	{
-    // SerialUSB.print("c");
 		sum.concat(getLevel(getValue()));
 	}
 	
 	int receivedInt = strtol(sum.c_str(), NULL, 8);
 
-	// myOut.print("checksum received: ");
-	// myOut.print(receivedInt);
-	// myOut.print("   calculated: ");
-  // myOut.println(localCheckSum - 3);
-    
 	// We need to remove the last char (ETX-003) because it is not part of the checksum
 	// Is cheaper to remove it here than to filter its adition.
   // Compare the calculated checksum and the received from sender
 	if (receivedInt == localCheckSum - 3) {
-		myOut.println("checksum OK");
+    log(CHECKSUM_OK);
 		return true;
 	} 
-	myOut.println("checksum ERROR!!");
+  log(CHECKSUM_ERROR);
 	return false;
 }
 
@@ -218,11 +218,7 @@ bool ReadLight::calibrate() {
   while (true) {   
 
     // Get new value
-    // SerialUSB.println("a");
     currentValue = getValue();
-    // SerialUSB.println("A");
-
-    // myOut.print(newLevel);
 
     // I value is bigger than previous go up one level
     if (currentValue > oldValue) {
@@ -230,12 +226,9 @@ bool ReadLight::calibrate() {
     } else {
       // If we reach the levelnum we are done!
       if (newLevel + 1 == levelNum) {
-
-        myOut.println("Calibrated!!");
-        
+        log(CALIBRATED);
         // Keep the watchdog timer cool
         feedDOG();
-
         return true;
       } 
 
@@ -267,7 +260,6 @@ char ReadLight::getChar() {
     
     // Ask for values until we have the 3 we need for an octal ASCII char
     for (int i = 0; i < 3; ++i) {
-      // SerialUSB.println("h");
       octalString.concat(getLevel(getValue()));
     }
     
@@ -277,10 +269,6 @@ char ReadLight::getChar() {
     
     // Convert ASCII to char
     char newChar = newInt;
-
-    // myOut.print(octalString);
-    // myOut.print(" ==> ");
-    // myOut.println(newChar);
 
     // Return the obtained char
     return newChar;
@@ -326,18 +314,12 @@ float ReadLight::getValue() {
 
   while (true) {  //CAMBIAR hay que poner un timeout o algo que impida quedarse atorado aqui... podria ser while(!EOT)
 
-    // SerialUSB.print("v");
-
     // Getting reading from light sensor
     newReading = getLight();
 
     //check if we need to restart.
     if (dogBite()) {
-      if (!EOT) {
-        // SerialUSB.print("w");
-        EOT = true;
-        //break;
-      }
+      if (!EOT) EOT = true;
       return levelNum + 1;
     }
 
