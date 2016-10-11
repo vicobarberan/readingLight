@@ -6,23 +6,6 @@ import schedule
 import sys
 import math
 
-texto = 'hola'
-credentials = oct(int(binascii.hexlify(texto), 16))[1:]
-
-#esto lo covierte en hexadecimal
-# res = binascii.hexlify(texto)
-
-#esto lo hace decimal
-#int(res, 16)
-
-#esto lo hace octal
-#oct()
-
-# para regresarla:
-binascii.unhexlify('%x' % int(credentials,8))
-
-# payload = '00000010' + credentials + '00000100'
-
 withSerial = False
 
 gamma = 2.0
@@ -38,13 +21,11 @@ checksum = 0
 
 # el periodo no puede ser menor que el refresh rate de la pantalla. (60hz - 16.6ms)
 # Creo que lo mas seguro seria mantenernos abajo de 30hz (33.3ms) para estar seguros de que funcione en cualquier hardware.
-# periodo = .070
 periodo = .070
 
 if withSerial: 
 	SCK = serial.Serial('/dev/ttyACM0', 115200)
 	SCK.timeout = periodo
-
 
 '''
 Low level function to color screen to a determined value
@@ -198,12 +179,10 @@ def paint(colorValue):
 	time.sleep(periodo)
 
 
-(width, height) = (300, 300)
+(width, height) = (500, 500)
 screen = pygame.display.set_mode((width, height))
 
 print str(periodo*1000) + " ms -- " + str( ( (1/periodo) * math.sqrt(levelNum-1) ) / 8.0 ) + " bytes/seg" 
-
-state = 1
 
 while True:
 
@@ -225,14 +204,7 @@ while True:
 	EOT()
 
 
-	# if state == 1: paint(1)
-	# elif state == 2: 
-	# 	for i in range(2):
-	# 		ramp(levelNum)
-
-	# 	state = state + 1
-	# elif state == 3:
-
+'''
 	events = pygame.event.get()
 
 	for event in events:
@@ -249,15 +221,7 @@ while True:
 					periodo = periodo + 0.005
 					print str(periodo*1000) + " ms -- " + str( ( (1/periodo) * math.sqrt(levelNum-1) ) / 8.0 ) + " bytes/seg"
 
-			print event.key
+			# print event.key
 
 			if state == 3: sendChar(str(unichr(event.key)))
-
-			
-
 '''
-2	00000010	2h		start of text
-3	00000011	3h		end of text
-4	00000100	4h		end of transmission
-'''
-

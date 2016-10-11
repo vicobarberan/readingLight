@@ -19,12 +19,7 @@ void loop() {
 		SerialUSB.print(", ");
 	}
 	SerialUSB.println("");
-	for (int i=0; i<results.logIndex; i++) {
-		SerialUSB.print(results.log[i]);
-		SerialUSB.print(", ");
-	}
-	SerialUSB.println("");
-
+	
 }
 
 
