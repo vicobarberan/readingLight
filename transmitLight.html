@@ -18,10 +18,13 @@
   <div id="light" style="position: absolute; top: 50px"></div>
   <div style="position: absolute; top: 45px; left: 320px; text-align: right;"><form>
   Acces Point SSID:
-  <input id="SSID" type="text" style="margin: 7px" value="yourSSIDname">
+  <input id="SSID" type="text" style="margin: 7px" value="your SSIDname">
   <br>
   Password:
   <input id="PASS" type="text" style="margin: 7px" value="yourWIFIpass">
+  <br>
+  ID Token:
+  <input id="TOKEN" type="text" style="margin: 7px" value="yourToken">
   <br>
   <input id="start" type="button" value="Start" style="height:28px; width:120px; margin: 12px" onclick="load();" />
 
@@ -189,6 +192,7 @@
       sendWord("auth\n");
       sendWord(document.getElementById("SSID").value + "\n"); //We should validate text input here
       sendWord(document.getElementById("PASS").value + "\n");
+      sendWord(document.getElementById("TOKEN").value + "\n");
       
       ETX();
       sendChecksum();
