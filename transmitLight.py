@@ -14,7 +14,7 @@ MIN = 0
 MAX = levelNum - 2
 REPEAT = levelNum - 1
 
-previousNum = 10
+previousNum = levelNum + 1
 
 #El checksum sera de 6 digitos en octal (777777) permite 32kbytes
 checksum = 0
@@ -41,7 +41,7 @@ def outDigit(digit):
 	# if this value was the last sended use the REPEAT value 
 	if digit == previousNum:
 		# print "REPEAT"
-		previousNum = 10
+		previousNum = levelNum + 1
 		paint(REPEAT)
 	# if the previous sended value is diferent from this, send it as is
 	else:
