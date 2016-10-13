@@ -31,8 +31,9 @@ private:
 	// Variables to manage sensor readings
 	float newReading = 0;		// Here we store the light sensor new readings
 	float OldReading = 0;		// Variable for saving readings between loops
-	int repetition = 0;			// Whit this we validate readings, we need at least to repetitions inside the tolerance
-	float tolerance = 0.30;		// Threshold for considering a reading the same as other
+	int repetition = 0;			// Whit this we validate readings, we need at least MIN_REP repetitions inside the tolerance
+	int MIN_REP = 2;
+	float tolerance = 0.20;		// Threshold for considering a reading the same as other
 
 	// Variables to manage screen color levels
 	int levelNum = 9;			// Number of different grey levels the sensor can read (the screen should use the same number)

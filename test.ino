@@ -21,5 +21,3 @@ void loop() {
 	SerialUSB.println("");
 	
 }
-
-

@@ -337,7 +337,7 @@ float ReadLight::getValue() {
     OldReading = newReading;
 
     // We need ONE repetition in reading to consider it valid.
-    if (repetition == 1) {
+    if (repetition == MIN_REP) {
       return newReading;
     }
   }
